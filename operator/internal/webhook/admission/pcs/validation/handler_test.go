@@ -16,6 +16,7 @@ package validation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/ai-dynamo/grove/operator/internal/scheduler"
 	"github.com/ai-dynamo/grove/operator/internal/scheduler/kueue"
 	"github.com/ai-dynamo/grove/operator/internal/scheduler/lpx"
+	schedulerregistry "github.com/ai-dynamo/grove/operator/internal/scheduler/registry"
 	testutils "github.com/ai-dynamo/grove/operator/test/utils"
 
 	"github.com/go-logr/logr"
@@ -211,6 +213,94 @@ func TestValidateCreate(t *testing.T) {
 	}
 }
 
+func TestValidateCreateWithKubeSchedulerName(t *testing.T) {
+	tests := []struct {
+		name           string
+		kubeConfig     *runtime.RawExtension
+		schedulerNames []string
+		errorContains  string
+	}{
+		{
+			name:           "kubeSchedulerName is accepted",
+			kubeConfig:     &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			schedulerNames: []string{"my-scheduler", "my-scheduler"},
+		},
+		{
+			name:           "default-scheduler and empty are still accepted",
+			kubeConfig:     &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			schedulerNames: []string{"default-scheduler", ""},
+		},
+		{
+			name:           "kubeSchedulerName mixed with default-scheduler and empty is accepted",
+			kubeConfig:     &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			schedulerNames: []string{"my-scheduler", "default-scheduler", ""},
+		},
+		{
+			name:           "kubeSchedulerName mixed with kai-scheduler is rejected",
+			kubeConfig:     &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			schedulerNames: []string{"my-scheduler", "kai-scheduler"},
+			errorContains:  "the schedulerName for all pods have to be the same",
+		},
+		{
+			name:           "unknown schedulerName is rejected",
+			kubeConfig:     &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			schedulerNames: []string{"other-scheduler"},
+			errorContains:  "schedulerName must be an enabled scheduler backend",
+		},
+		{
+			name:           "kubeSchedulerName is rejected when it is not configured",
+			schedulerNames: []string{"my-scheduler"},
+			errorContains:  "schedulerName must be an enabled scheduler backend",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := testutils.NewTestClientBuilder().Build()
+			mgr := &testutils.FakeManager{Client: cl, Scheme: cl.Scheme(), Logger: logr.Discard()}
+			cfg := groveconfigv1alpha1.OperatorConfiguration{
+				TopologyAwareScheduling: getDefaultTASConfig(),
+				Network:                 getDefaultNetworkConfig(),
+				Scheduler: groveconfigv1alpha1.SchedulerConfiguration{
+					Profiles: []groveconfigv1alpha1.SchedulerProfile{
+						{Name: groveconfigv1alpha1.SchedulerNameKube, Config: tt.kubeConfig},
+						{Name: groveconfigv1alpha1.SchedulerNameKai},
+					},
+					DefaultProfileName: string(groveconfigv1alpha1.SchedulerNameKube),
+				},
+			}
+			schedRegistry, err := schedulerregistry.New(cl, cl, cl.Scheme(), record.NewFakeRecorder(10), cfg.Scheduler)
+			require.NoError(t, err)
+			handler := NewHandler(mgr, &cfg, schedRegistry)
+
+			pcsBuilder := testutils.NewPodCliqueSetBuilder("test-pcs", "default", uuid.NewUUID()).
+				WithReplicas(1).
+				WithTerminationDelay(4 * time.Hour).
+				WithCliqueStartupType(ptr.To(grovecorev1alpha1.CliqueStartupTypeAnyOrder))
+			for i, schedulerName := range tt.schedulerNames {
+				pcsBuilder = pcsBuilder.WithPodCliqueTemplateSpec(
+					testutils.NewPodCliqueTemplateSpecBuilder(fmt.Sprintf("c%d", i)).
+						WithReplicas(1).
+						WithRoleName(fmt.Sprintf("role-%d", i)).
+						WithMinAvailable(1).
+						WithPodSpec(testutils.NewPodWithBuilderWithDefaultSpec("test-pod", "default").
+							WithSchedulerName(schedulerName).
+							Build().Spec).
+						Build())
+			}
+
+			_, err = handler.ValidateCreate(context.Background(), pcsBuilder.Build())
+
+			if tt.errorContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			}
+		})
+	}
+}
+
 func TestValidatePodCliqueSetWithLPXBackend(t *testing.T) {
 	profile := groveconfigv1alpha1.SchedulerProfile{Name: groveconfigv1alpha1.SchedulerNameLPX}
 	registry := &testutils.FakeSchedulerRegistry{
@@ -253,7 +343,7 @@ func TestValidateUpdatePassesOldPodCliqueSetToBackend(t *testing.T) {
 	cl := testutils.NewTestClientBuilder().Build()
 	mgr := &testutils.FakeManager{Client: cl, Scheme: cl.Scheme(), Logger: logr.Discard()}
 	kueueBackend := kueue.New(cl, cl.Scheme(), record.NewFakeRecorder(10),
-		groveconfigv1alpha1.SchedulerProfile{Name: groveconfigv1alpha1.SchedulerNameKueue})
+		groveconfigv1alpha1.SchedulerProfile{Name: groveconfigv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, kueueBackend.Init(nil))
 	cfg := groveconfigv1alpha1.OperatorConfiguration{
 		TopologyAwareScheduling: getDefaultTASConfig(),

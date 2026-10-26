@@ -37,17 +37,22 @@ var _ scheduler.Registry = (*registry)(nil)
 
 // registry is the concrete implementation of scheduler.Registry.
 type registry struct {
-	backends       map[string]scheduler.Backend
-	defaultBackend scheduler.Backend
+	backends          map[string]scheduler.Backend
+	defaultBackend    scheduler.Backend
+	kubeSchedulerName string
 }
 
 // New creates a scheduler.Registry by initializing backend instances for each
 // profile in cfg.Profiles.
 // NOTE: This function should be called once during the lifecycle of the Grove operator.
 func New(cl, directClient client.Client, scheme *runtime.Scheme, eventRecorder record.EventRecorder, cfg configv1alpha1.SchedulerConfiguration) (scheduler.Registry, error) {
-	reg := &registry{backends: make(map[string]scheduler.Backend)}
+	kubeSchedulerName, err := kubeSchedulerName(cfg)
+	if err != nil {
+		return nil, err
+	}
+	reg := &registry{backends: make(map[string]scheduler.Backend), kubeSchedulerName: kubeSchedulerName}
 	for _, p := range cfg.Profiles {
-		backend, err := newSchedulerBackend(cfg, cl, directClient, scheme, eventRecorder, p)
+		backend, err := newSchedulerBackend(cfg, kubeSchedulerName, cl, directClient, scheme, eventRecorder, p)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize %s backend: %w", p.Name, err)
 		}
@@ -62,7 +67,13 @@ func New(cl, directClient client.Client, scheme *runtime.Scheme, eventRecorder r
 }
 
 func (r *registry) Get(name string) scheduler.Backend {
-	return r.backends[name]
+	if b, ok := r.backends[name]; ok {
+		return b
+	}
+	if name != "" && name == r.kubeSchedulerName {
+		return r.backends[string(configv1alpha1.SchedulerNameKube)]
+	}
+	return nil
 }
 
 func (r *registry) GetDefault() scheduler.Backend {
@@ -73,7 +84,7 @@ func (r *registry) GetOrDefault(name string) scheduler.Backend {
 	if name == "" {
 		return r.defaultBackend
 	}
-	return r.backends[name]
+	return r.Get(name)
 }
 
 // All returns all registered scheduler backends keyed by name.
@@ -96,7 +107,7 @@ func (r *registry) AllTopologyAware() map[string]scheduler.TopologyAwareBackend 
 
 // newSchedulerBackend creates and initializes a Backend for the given profile.
 // NOTE: For any newly supported backend, add a case for it in the switch statement.
-func newSchedulerBackend(cfg configv1alpha1.SchedulerConfiguration, cl, directClient client.Client, scheme *runtime.Scheme, rec record.EventRecorder, p configv1alpha1.SchedulerProfile) (scheduler.Backend, error) {
+func newSchedulerBackend(cfg configv1alpha1.SchedulerConfiguration, kubeSchedulerName string, cl, directClient client.Client, scheme *runtime.Scheme, rec record.EventRecorder, p configv1alpha1.SchedulerProfile) (scheduler.Backend, error) {
 	var b scheduler.Backend
 	switch p.Name {
 	case configv1alpha1.SchedulerNameKube:
@@ -104,7 +115,7 @@ func newSchedulerBackend(cfg configv1alpha1.SchedulerConfiguration, cl, directCl
 	case configv1alpha1.SchedulerNameKai:
 		b = kai.New(cl, scheme, rec, p)
 	case configv1alpha1.SchedulerNameKueue:
-		b = kueue.New(cl, scheme, rec, p)
+		b = kueue.New(cl, scheme, rec, p, kubeSchedulerName)
 	case configv1alpha1.SchedulerNameVolcano:
 		b = volcano.New(cl, scheme, rec, p)
 	case configv1alpha1.SchedulerNameLPX:
@@ -123,4 +134,16 @@ func newSchedulerBackend(cfg configv1alpha1.SchedulerConfiguration, cl, directCl
 		return nil, err
 	}
 	return b, nil
+}
+
+func kubeSchedulerName(cfg configv1alpha1.SchedulerConfiguration) (string, error) {
+	kubeProfileIndex := slices.IndexFunc(cfg.Profiles, func(p configv1alpha1.SchedulerProfile) bool { return p.Name == configv1alpha1.SchedulerNameKube })
+	if kubeProfileIndex == -1 {
+		return "", nil
+	}
+	kubeCfg, err := configv1alpha1.DecodeKubeSchedulerConfig(cfg.Profiles[kubeProfileIndex].Config)
+	if err != nil {
+		return "", err
+	}
+	return kubeCfg.KubeSchedulerName, nil
 }

@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 )
 
@@ -143,6 +144,58 @@ func TestNewRegistry(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reg.GetDefault())
 		assert.Equal(t, string(configv1alpha1.SchedulerNameVolcano), reg.GetDefault().Name())
+	})
+}
+
+func TestNewRegistry_KubeSchedulerName(t *testing.T) {
+	newRegistry := func(t *testing.T, kubeConfig *runtime.RawExtension, defaultProfileName configv1alpha1.SchedulerName) scheduler.Registry {
+		cl := testutils.CreateDefaultFakeClient(nil)
+		cfg := configv1alpha1.SchedulerConfiguration{
+			Profiles: []configv1alpha1.SchedulerProfile{
+				{Name: configv1alpha1.SchedulerNameKube, Config: kubeConfig},
+				{Name: configv1alpha1.SchedulerNameKai},
+			},
+			DefaultProfileName: string(defaultProfileName),
+		}
+		reg, err := New(cl, cl, cl.Scheme(), record.NewFakeRecorder(10), cfg)
+		require.NoError(t, err)
+		return reg
+	}
+
+	t.Run("kubeSchedulerName resolves to the kube backend", func(t *testing.T) {
+		reg := newRegistry(t, &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)}, configv1alpha1.SchedulerNameKube)
+		kubeBackend := reg.Get(string(configv1alpha1.SchedulerNameKube))
+		require.NotNil(t, kubeBackend)
+		assert.Equal(t, kubeBackend, reg.Get("my-scheduler"))
+		assert.Equal(t, kubeBackend, reg.GetOrDefault("my-scheduler"))
+		assert.Equal(t, kubeBackend, reg.GetOrDefault(""))
+		assert.Nil(t, reg.Get("other-scheduler"))
+		assert.NotContains(t, reg.All(), "my-scheduler")
+	})
+
+	t.Run("kubeSchedulerName resolves to the kube backend when it is not the default", func(t *testing.T) {
+		reg := newRegistry(t, &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)}, configv1alpha1.SchedulerNameKai)
+		assert.Equal(t, reg.Get(string(configv1alpha1.SchedulerNameKube)), reg.GetOrDefault("my-scheduler"))
+		assert.Equal(t, reg.Get(string(configv1alpha1.SchedulerNameKai)), reg.GetOrDefault(""))
+	})
+
+	t.Run("no config adds no other name", func(t *testing.T) {
+		reg := newRegistry(t, nil, configv1alpha1.SchedulerNameKube)
+		assert.NotNil(t, reg.Get(string(configv1alpha1.SchedulerNameKube)))
+		assert.Nil(t, reg.Get("my-scheduler"))
+	})
+
+	t.Run("invalid config fails initialization", func(t *testing.T) {
+		cl := testutils.CreateDefaultFakeClient(nil)
+		cfg := configv1alpha1.SchedulerConfiguration{
+			Profiles: []configv1alpha1.SchedulerProfile{
+				{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":5}`)}},
+			},
+			DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+		}
+		reg, err := New(cl, cl, cl.Scheme(), record.NewFakeRecorder(10), cfg)
+		require.Error(t, err)
+		assert.Nil(t, reg)
 	})
 }
 

@@ -92,9 +92,8 @@ type SchedulerConfiguration struct {
 
 // SchedulerProfile defines a scheduler backend profile with optional backend-specific config.
 type SchedulerProfile struct {
-	// Name is the scheduler profile name.
+	// Name is the scheduler profile name. It selects the scheduler backend.
 	// For the Kubernetes default scheduler use the standard "default-scheduler".
-	// Ensure that the name chosen is a valid scheduler name. The name will also be directly set in `Pod.Spec.SchedulerName`.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=kai-scheduler;kueue;default-scheduler;volcano;lpx-scheduler
 	Name SchedulerName `json:"name"`
@@ -112,6 +111,7 @@ type KaiSchedulerConfiguration struct {
 // KueueSchedulerConfiguration defines the configuration for the kueue backend.
 type KueueSchedulerConfiguration struct {
 	// UnderlyingSchedulerName is the schedulerName used after Kueue admits the Pods.
+	// Defaults to "default-scheduler", or to the kubeSchedulerName of the default-scheduler profile config if that is set.
 	// +optional
 	UnderlyingSchedulerName string `json:"underlyingSchedulerName,omitempty"`
 }
@@ -122,6 +122,9 @@ type KubeSchedulerConfig struct {
 	// GangScheduling indicates if Gang scheduling capability is enabled.
 	// +optional
 	GangScheduling bool `json:"gangScheduling,omitempty"`
+	// KubeSchedulerName is the kube-scheduler that runs the workload Pods of this backend. Defaults to "default-scheduler".
+	// +optional
+	KubeSchedulerName string `json:"kubeSchedulerName,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

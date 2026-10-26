@@ -79,7 +79,7 @@ func newHandler(t *testing.T, existing ...client.Object) *Handler {
 	t.Helper()
 	cl := testutils.CreateDefaultFakeClient(existing)
 	kueueBackend := kueue.New(cl, cl.Scheme(), record.NewFakeRecorder(10),
-		configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+		configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, kueueBackend.Init(nil))
 	return &Handler{
 		client:  cl,

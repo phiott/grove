@@ -22,10 +22,49 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 )
 
 func TestBackend_PreparePod(t *testing.T) {
+	tests := []struct {
+		name                  string
+		config                *runtime.RawExtension
+		expectedSchedulerName string
+	}{
+		{
+			name:                  "no config sets default-scheduler",
+			expectedSchedulerName: string(configv1alpha1.SchedulerNameKube),
+		},
+		{
+			name:                  "config without kubeSchedulerName sets default-scheduler",
+			config:                &runtime.RawExtension{Raw: []byte(`{"gangScheduling":false}`)},
+			expectedSchedulerName: string(configv1alpha1.SchedulerNameKube),
+		},
+		{
+			name:                  "config with kubeSchedulerName sets that name",
+			config:                &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)},
+			expectedSchedulerName: "my-scheduler",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := testutils.CreateDefaultFakeClient(nil)
+			recorder := record.NewFakeRecorder(10)
+			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKube, Config: tt.config}
+			b := New(cl, cl.Scheme(), recorder, profile)
+			require.NoError(t, b.Init(cl))
+
+			pod := testutils.NewPodBuilder("test-pod", "default").Build()
+			require.NoError(t, b.PreparePod(pod))
+
+			assert.Equal(t, tt.expectedSchedulerName, pod.Spec.SchedulerName)
+			assert.Equal(t, string(configv1alpha1.SchedulerNameKube), b.Name())
+		})
+	}
+}
+
+func TestBackend_PreparePod_WithoutInit(t *testing.T) {
 	cl := testutils.CreateDefaultFakeClient(nil)
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKube}
@@ -36,4 +75,19 @@ func TestBackend_PreparePod(t *testing.T) {
 	require.NoError(t, b.PreparePod(pod))
 
 	assert.Equal(t, string(configv1alpha1.SchedulerNameKube), pod.Spec.SchedulerName)
+}
+
+func TestBackend_Init_InvalidConfig(t *testing.T) {
+	cl := testutils.CreateDefaultFakeClient(nil)
+	recorder := record.NewFakeRecorder(10)
+	profile := configv1alpha1.SchedulerProfile{
+		Name:   configv1alpha1.SchedulerNameKube,
+		Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":5}`)},
+	}
+	b := New(cl, cl.Scheme(), recorder, profile)
+
+	err := b.Init(cl)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding default-scheduler profile config")
 }

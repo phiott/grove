@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -368,6 +369,74 @@ func TestValidateSchedulerConfiguration(t *testing.T) {
 			expectErrors:   1,
 			expectedFields: []string{"scheduler.profiles[1].name"},
 			expectedTypes:  []field.ErrorType{field.ErrorTypeDuplicate},
+		},
+		{
+			name: "valid: kube profile config sets kubeSchedulerName",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"my-scheduler"}`)}},
+					{Name: configv1alpha1.SchedulerNameKai},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors: 0,
+		},
+		{
+			name: "valid: kube profile config sets kubeSchedulerName to default-scheduler",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"default-scheduler"}`)}},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors: 0,
+		},
+		{
+			name: "valid: kube profile config without kubeSchedulerName",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"gangScheduling":false}`)}},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors: 0,
+		},
+		{
+			name: "invalid: kube profile kubeSchedulerName is not a DNS subdomain",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"My_Scheduler"}`)}},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors:   1,
+			expectedFields: []string{"scheduler.profiles[0].config.kubeSchedulerName"},
+			expectedTypes:  []field.ErrorType{field.ErrorTypeInvalid},
+		},
+		{
+			name: "invalid: kube profile kubeSchedulerName is the name of another scheduler profile",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKai},
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":"kai-scheduler"}`)}},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors:   1,
+			expectedFields: []string{"scheduler.profiles[1].config.kubeSchedulerName"},
+			expectedTypes:  []field.ErrorType{field.ErrorTypeInvalid},
+		},
+		{
+			name: "invalid: kube profile config does not parse",
+			scheduler: &configv1alpha1.SchedulerConfiguration{
+				Profiles: []configv1alpha1.SchedulerProfile{
+					{Name: configv1alpha1.SchedulerNameKube, Config: &runtime.RawExtension{Raw: []byte(`{"kubeSchedulerName":5}`)}},
+				},
+				DefaultProfileName: string(configv1alpha1.SchedulerNameKube),
+			},
+			expectErrors:   1,
+			expectedFields: []string{"scheduler.profiles[0].config"},
+			expectedTypes:  []field.ErrorType{field.ErrorTypeInvalid},
 		},
 	}
 

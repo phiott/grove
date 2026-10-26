@@ -275,18 +275,14 @@ func (v *pcsValidator) validatePodCliqueTemplates(fldPath *field.Path) ([]string
 }
 
 // validateSchedulerNames ensures all pod scheduler names resolve to the same scheduler and that scheduler is enabled.
-// Empty schedulerName is resolved to the default backend name from the injected registry.
 func (v *pcsValidator) validateSchedulerNames(schedulerNames []string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	specPath := fldPath.Child("spec").Child("podSpec").Child("schedulerName")
 
-	defaultSchedulerName := v.schedRegistry.GetDefault().Name()
-
 	// Check-1: Check if the scheduler names are unique
-	// Resolve empty to default backend name; then require all resolved names to be the same.
 	uniqueSchedulerNames := lo.Uniq(lo.Map(schedulerNames, func(item string, _ int) string {
-		if item == "" {
-			return defaultSchedulerName
+		if backend := v.schedRegistry.GetOrDefault(item); backend != nil {
+			return backend.Name()
 		}
 		return item
 	}))

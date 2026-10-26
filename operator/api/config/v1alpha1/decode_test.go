@@ -73,6 +73,23 @@ kind: OperatorConfiguration
 			},
 		},
 		{
+			name: "default-scheduler profile config parsed",
+			input: []byte(`apiVersion: operator.config.grove.io/v1alpha1
+kind: OperatorConfiguration
+scheduler:
+  profiles:
+  - name: default-scheduler
+    config:
+      kubeSchedulerName: my-scheduler
+`),
+			assertFn: func(t *testing.T, cfg *OperatorConfiguration) {
+				require.Len(t, cfg.Scheduler.Profiles, 1)
+				require.NotNil(t, cfg.Scheduler.Profiles[0].Config)
+				assert.JSONEq(t, `{"kubeSchedulerName":"my-scheduler"}`, string(cfg.Scheduler.Profiles[0].Config.Raw))
+				assert.Equal(t, string(SchedulerNameKube), cfg.Scheduler.DefaultProfileName)
+			},
+		},
+		{
 			name:    "malformed YAML returns error",
 			input:   []byte(`{this is not valid yaml: [`),
 			wantErr: true,

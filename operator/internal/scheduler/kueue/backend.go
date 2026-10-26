@@ -67,13 +67,14 @@ type resolvedTopologyRequest struct {
 }
 
 type schedulerBackend struct {
-	client        client.Client
-	directReader  client.Reader
-	scheme        *runtime.Scheme
-	name          string
-	eventRecorder record.EventRecorder
-	profile       configv1alpha1.SchedulerProfile
-	config        configv1alpha1.KueueSchedulerConfiguration
+	client            client.Client
+	directReader      client.Reader
+	scheme            *runtime.Scheme
+	name              string
+	eventRecorder     record.EventRecorder
+	profile           configv1alpha1.SchedulerProfile
+	config            configv1alpha1.KueueSchedulerConfiguration
+	kubeSchedulerName string
 }
 
 var (
@@ -84,14 +85,15 @@ var (
 
 // New creates a new Kueue backend instance. profile is the scheduler profile for kueue; schedulerBackend
 // uses profile.Name and may unmarshal profile.Config into KueueSchedulerConfiguration.
-func New(cl client.Client, scheme *runtime.Scheme, eventRecorder record.EventRecorder, profile configv1alpha1.SchedulerProfile) scheduler.Backend {
+func New(cl client.Client, scheme *runtime.Scheme, eventRecorder record.EventRecorder, profile configv1alpha1.SchedulerProfile, kubeSchedulerName string) scheduler.Backend {
 	return &schedulerBackend{
-		client:        cl,
-		scheme:        scheme,
-		name:          string(profile.Name),
-		eventRecorder: eventRecorder,
-		profile:       profile,
-		config:        defaultConfig(),
+		client:            cl,
+		scheme:            scheme,
+		name:              string(profile.Name),
+		eventRecorder:     eventRecorder,
+		profile:           profile,
+		config:            defaultConfig(kubeSchedulerName),
+		kubeSchedulerName: kubeSchedulerName,
 	}
 }
 
@@ -114,7 +116,7 @@ func (b *schedulerBackend) Init(directClient client.Client) error {
 	if err := json.Unmarshal(b.profile.Config.Raw, &b.config); err != nil {
 		return fmt.Errorf("failed to unmarshal kueue scheduler config: %w", err)
 	}
-	b.config = withDefaults(b.config)
+	b.config = withDefaults(b.config, b.kubeSchedulerName)
 	return nil
 }
 
@@ -598,14 +600,14 @@ func (b *schedulerBackend) ValidatePodCliqueScale(_ context.Context, oldReplicas
 	return fmt.Errorf("kueue backend does not support scaling a PodClique (%d -> %d) because its Kueue Workload podSets are fixed when the PodGang is created and are never updated; scale the PodCliqueScalingGroup that owns it instead", oldReplicas, newReplicas)
 }
 
-func defaultConfig() configv1alpha1.KueueSchedulerConfiguration {
+func defaultConfig(kubeSchedulerName string) configv1alpha1.KueueSchedulerConfiguration {
 	return configv1alpha1.KueueSchedulerConfiguration{
-		UnderlyingSchedulerName: string(configv1alpha1.SchedulerNameKube),
+		UnderlyingSchedulerName: cmp.Or(kubeSchedulerName, string(configv1alpha1.SchedulerNameKube)),
 	}
 }
 
-func withDefaults(cfg configv1alpha1.KueueSchedulerConfiguration) configv1alpha1.KueueSchedulerConfiguration {
-	defaults := defaultConfig()
+func withDefaults(cfg configv1alpha1.KueueSchedulerConfiguration, kubeSchedulerName string) configv1alpha1.KueueSchedulerConfiguration {
+	defaults := defaultConfig(kubeSchedulerName)
 	if cfg.UnderlyingSchedulerName == "" {
 		cfg.UnderlyingSchedulerName = defaults.UnderlyingSchedulerName
 	}

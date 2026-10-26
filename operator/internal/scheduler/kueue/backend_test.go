@@ -45,7 +45,7 @@ func TestBackend_PreparePod_Defaults(t *testing.T) {
 	cl := testutils.CreateDefaultFakeClient(nil)
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	assert.NoError(t, b.Init(nil))
 
 	pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -95,6 +95,47 @@ func TestBackend_PreparePod_Defaults(t *testing.T) {
 	assert.NotContains(t, pod.Annotations, "kueue.x-k8s.io/retriable-in-group")
 }
 
+func TestBackend_Init_UnderlyingSchedulerName(t *testing.T) {
+	tests := []struct {
+		name              string
+		config            *runtime.RawExtension
+		kubeSchedulerName string
+		expected          string
+	}{
+		{
+			name:     "defaults to default-scheduler",
+			expected: string(configv1alpha1.SchedulerNameKube),
+		},
+		{
+			name:              "defaults to kubeSchedulerName when it is set",
+			kubeSchedulerName: "my-scheduler",
+			expected:          "my-scheduler",
+		},
+		{
+			name:              "config without underlyingSchedulerName defaults to kubeSchedulerName",
+			config:            &runtime.RawExtension{Raw: []byte(`{}`)},
+			kubeSchedulerName: "my-scheduler",
+			expected:          "my-scheduler",
+		},
+		{
+			name:              "underlyingSchedulerName takes precedence over kubeSchedulerName",
+			config:            &runtime.RawExtension{Raw: []byte(`{"underlyingSchedulerName":"custom-scheduler"}`)},
+			kubeSchedulerName: "my-scheduler",
+			expected:          "custom-scheduler",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := testutils.CreateDefaultFakeClient(nil)
+			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue, Config: tt.config}
+			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), profile, tt.kubeSchedulerName).(*schedulerBackend)
+			require.NoError(t, b.Init(nil))
+
+			assert.Equal(t, tt.expected, b.config.UnderlyingSchedulerName)
+		})
+	}
+}
+
 func TestBackend_RemovePodFinalizers(t *testing.T) {
 	const otherFinalizer = "example.com/other"
 	newPod := func(finalizers ...string) *corev1.Pod {
@@ -117,7 +158,7 @@ func TestBackend_RemovePodFinalizers(t *testing.T) {
 				existing = append(existing, tc.pod.DeepCopy())
 			}
 			cl := testutils.CreateDefaultFakeClient(existing)
-			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 			require.NoError(t, b.Init(nil))
 
 			pod := tc.pod
@@ -145,7 +186,7 @@ func TestBackend_PreparePod_ConfigAndExistingMetadata(t *testing.T) {
 			Raw: []byte(`{"underlyingSchedulerName":"custom-scheduler"}`),
 		},
 	}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	assert.NoError(t, b.Init(nil))
 
 	pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -202,7 +243,7 @@ func TestBackend_PreparePod_PCSGAndTopology(t *testing.T) {
 	cl := testutils.CreateDefaultFakeClient(nil)
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	pcsgReplicas := int32(2)
@@ -266,7 +307,7 @@ func TestBackend_TopologyRequestForPodGroup_CombinesRequiredAndPreferred(t *test
 	cl := testutils.CreateDefaultFakeClient(nil)
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	backend := New(cl, cl.Scheme(), recorder, profile)
+	backend := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, backend.Init(nil))
 	b := backend.(*schedulerBackend)
 
@@ -301,7 +342,7 @@ func TestBackend_PreparePod_RequiresPodGangForTopology(t *testing.T) {
 	cl := testutils.CreateDefaultFakeClient(nil)
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -339,7 +380,7 @@ func TestBackend_SyncPodGang_RequiresPodCliqueSetLabel(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
 	}
 	cl := testutils.NewTestClientBuilder().WithObjects(podGang).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 
 	require.ErrorContains(t, b.SyncPodGang(context.Background(), podGang), `must set label "app.kubernetes.io/part-of"`)
@@ -369,7 +410,7 @@ func TestBackend_SyncPodGang_RequiresPodCliqueSetQueueLabel(t *testing.T) {
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, podGang).Build()
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	require.ErrorContains(t, b.SyncPodGang(context.Background(), podGang), `must set label "kueue.x-k8s.io/queue-name"`)
@@ -396,7 +437,7 @@ func TestBackend_SyncPodGang_CreatesPrebuiltWorkloadForSimplePCS(t *testing.T) {
 	).Build()
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	rackKey := "topology.ai-dynamo.io/rack"
@@ -480,7 +521,7 @@ func newTestPCSAndPodGang() (*grovecorev1alpha1.PodCliqueSet, *groveschedulerv1a
 func TestBackend_SyncPodGang_LeavesHealthyWorkloadUntouched(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	staleWorkload := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -498,7 +539,7 @@ func TestBackend_SyncPodGang_LeavesHealthyWorkloadUntouched(t *testing.T) {
 func TestBackend_SyncPodGang_RecreatesFinishedWorkload(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	finishedWorkload := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -522,7 +563,7 @@ func TestBackend_SyncPodGang_RecreatesFinishedWorkload(t *testing.T) {
 func TestBackend_SyncPodGang_RecreatesDeactivatedWorkload(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	deactivatedWorkload := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -541,7 +582,7 @@ func TestBackend_PreparePod_RecreatesFinishedWorkload(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	pclq := newStandalonePodClique("demo-0-worker", "demo")
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, podGang, pclq).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	finishedWorkload := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -579,7 +620,7 @@ func TestBackend_PreparePod_UsesDirectReaderForFinishedCheck(t *testing.T) {
 	pclq := newStandalonePodClique("demo-0-worker", "demo")
 	cachedCl := testutils.NewTestClientBuilder().Build()
 	directCl := testutils.NewTestClientBuilder().Build()
-	b := New(cachedCl, cachedCl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cachedCl, cachedCl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(directCl))
 	require.NoError(t, cachedCl.Create(context.Background(), pcs))
 	require.NoError(t, cachedCl.Create(context.Background(), podGang))
@@ -634,7 +675,7 @@ func (r fixedReader) Get(_ context.Context, key client.ObjectKey, obj client.Obj
 func TestBackend_EnsureWorkload_StaleReadKeepsReplacement(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	replacement := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -662,7 +703,7 @@ func TestBackend_EnsureWorkload_StaleReadKeepsReplacement(t *testing.T) {
 func TestBackend_EnsureWorkload_AcceptsConcurrentReplacement(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	replacement := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default"},
@@ -681,7 +722,7 @@ func TestBackend_EnsureWorkload_AcceptsConcurrentReplacement(t *testing.T) {
 func TestBackend_SyncPodGang_WaitsForDeletedWorkloadToGo(t *testing.T) {
 	pcs, podGang := newTestPCSAndPodGang()
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, newStandalonePodClique("demo-0-worker", "demo")).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	finishedWorkload := &kueuev1beta2.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "default", Finalizers: []string{"test/hold"}},
@@ -759,7 +800,7 @@ func TestBackend_TailWorkloadWaitsForAnchor(t *testing.T) {
 		},
 	}}
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, pgm, anchor, tail, tailPCLQ).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	tailKey := client.ObjectKeyFromObject(tail)
 	tailPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
@@ -828,7 +869,7 @@ func TestBackend_SyncPodGang_RejectsInvalidMinReplicas(t *testing.T) {
 				pcs,
 				newStandalonePodClique("demo-0-worker", "demo"),
 			).Build()
-			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 			require.NoError(t, b.Init(nil))
 
 			require.ErrorContains(t, b.SyncPodGang(context.Background(), podGang), "outside the valid range [1, 4]")
@@ -870,7 +911,7 @@ func TestBackend_SyncPodGang_RejectsMultiplePartiallyAdmittedPodGroups(t *testin
 		newStandalonePodClique("demo-0-worker", "demo"),
 		newStandalonePodClique("demo-0-frontend", "demo"),
 	).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 
 	require.ErrorContains(t, b.SyncPodGang(context.Background(), podGang), "has more than one partially admitted standalone PodGroup")
@@ -902,7 +943,7 @@ func TestBackend_SyncPodGang_CreatesPrebuiltWorkloadForPCSGWithMinCountEqualsCou
 	).Build()
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	preferredTopologyKey := "kubernetes.io/hostname"
@@ -976,7 +1017,7 @@ func TestBackend_SyncPodGang_UsesTopologyConstraintGroupConfig(t *testing.T) {
 	).Build()
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	require.NoError(t, b.Init(nil))
 
 	groupTopologyKey := "topology.kubernetes.io/rack"
@@ -1042,7 +1083,7 @@ func TestBackend_SyncPodGang_SortsPodSetsByName(t *testing.T) {
 		newStandalonePodClique("demo-0-prefill", "demo"),
 		newStandalonePodClique("demo-0-decode", "demo"),
 	).Build()
-	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 	require.NoError(t, b.Init(nil))
 	podGang := &groveschedulerv1alpha1.PodGang{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1163,7 +1204,7 @@ func TestBackend_ValidatePodCliqueSet_MinCount(t *testing.T) {
 			cl := testutils.CreateDefaultFakeClient(nil)
 			recorder := record.NewFakeRecorder(10)
 			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-			b := New(cl, cl.Scheme(), recorder, profile)
+			b := New(cl, cl.Scheme(), recorder, profile, "")
 			require.NoError(t, b.Init(nil))
 
 			pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -1226,7 +1267,7 @@ func TestBackend_ValidatePodCliqueScale(t *testing.T) {
 			cl := testutils.CreateDefaultFakeClient(nil)
 			recorder := record.NewFakeRecorder(10)
 			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-			b := New(cl, cl.Scheme(), recorder, profile)
+			b := New(cl, cl.Scheme(), recorder, profile, "")
 			require.NoError(t, b.Init(nil))
 
 			scaleValidator, ok := b.(scheduler.PodCliqueScaleValidator)
@@ -1281,7 +1322,7 @@ func TestBackend_ValidatePodCliqueSet_QueueLabel(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			cl := testutils.CreateDefaultFakeClient(nil)
-			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 			require.NoError(t, b.Init(nil))
 
 			var opts []scheduler.ValidateOption
@@ -1345,7 +1386,7 @@ func TestBackend_ValidatePodCliqueSet_AutoScalingConfig(t *testing.T) {
 			cl := testutils.CreateDefaultFakeClient(nil)
 			recorder := record.NewFakeRecorder(10)
 			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-			b := New(cl, cl.Scheme(), recorder, profile)
+			b := New(cl, cl.Scheme(), recorder, profile, "")
 			require.NoError(t, b.Init(nil))
 
 			pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -1436,7 +1477,7 @@ func TestBackend_ValidatePodCliqueSet_TopologyRequiredAndPreferred(t *testing.T)
 			cl := testutils.CreateDefaultFakeClient(nil)
 			recorder := record.NewFakeRecorder(10)
 			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-			b := New(cl, cl.Scheme(), recorder, profile)
+			b := New(cl, cl.Scheme(), recorder, profile, "")
 			require.NoError(t, b.Init(nil))
 
 			pcs := &grovecorev1alpha1.PodCliqueSet{
@@ -1547,7 +1588,7 @@ func TestBackend_ValidatePodCliqueSet_PodSetLimit(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			cl := testutils.CreateDefaultFakeClient(nil)
-			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue})
+			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}, "")
 			require.NoError(t, b.Init(nil))
 
 			pcs := &grovecorev1alpha1.PodCliqueSet{

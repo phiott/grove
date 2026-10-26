@@ -15,6 +15,7 @@
 package v1alpha1
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,6 +35,18 @@ func DecodeOperatorConfig(data []byte) (*OperatorConfiguration, error) {
 	cfg := &OperatorConfiguration{}
 	if err := runtime.DecodeInto(configDecoder, data, cfg); err != nil {
 		return nil, fmt.Errorf("decoding operator config: %w", err)
+	}
+	return cfg, nil
+}
+
+// DecodeKubeSchedulerConfig parses the config of the default-scheduler profile into a KubeSchedulerConfig.
+func DecodeKubeSchedulerConfig(rawConfig *runtime.RawExtension) (KubeSchedulerConfig, error) {
+	cfg := KubeSchedulerConfig{}
+	if rawConfig == nil || len(rawConfig.Raw) == 0 {
+		return cfg, nil
+	}
+	if err := json.Unmarshal(rawConfig.Raw, &cfg); err != nil {
+		return cfg, fmt.Errorf("decoding default-scheduler profile config: %w", err)
 	}
 	return cfg, nil
 }

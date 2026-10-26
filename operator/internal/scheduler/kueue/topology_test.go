@@ -83,7 +83,7 @@ func TestCheckTopologyDrift(t *testing.T) {
 func newKueueBackend(cl client.Client) scheduler.TopologyAwareBackend {
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKueue}
-	b := New(cl, cl.Scheme(), recorder, profile)
+	b := New(cl, cl.Scheme(), recorder, profile, "")
 	return b.(scheduler.TopologyAwareBackend)
 }
 

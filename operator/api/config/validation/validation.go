@@ -22,7 +22,9 @@ import (
 	configv1alpha1 "github.com/ai-dynamo/grove/operator/api/config/v1alpha1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
 )
@@ -69,6 +71,9 @@ func validateSchedulerConfiguration(scheduler *configv1alpha1.SchedulerConfigura
 			}
 			seenNames.Insert(p.Name)
 		}
+		if p.Name == configv1alpha1.SchedulerNameKube {
+			allErrs = append(allErrs, validateKubeSchedulerConfig(p.Config, idxPath.Child("config"))...)
+		}
 	}
 	if !seenNames.Has(configv1alpha1.SchedulerNameKube) {
 		allErrs = append(allErrs, field.Required(profilesPath, fmt.Sprintf("the %q scheduler profile is required", configv1alpha1.SchedulerNameKube)))
@@ -77,6 +82,25 @@ func validateSchedulerConfiguration(scheduler *configv1alpha1.SchedulerConfigura
 		allErrs = append(allErrs, field.Required(defaultProfileNamePath, "default scheduler profile name is required"))
 	} else if !seenNames.Has(configv1alpha1.SchedulerName(scheduler.DefaultProfileName)) {
 		allErrs = append(allErrs, field.Invalid(defaultProfileNamePath, scheduler.DefaultProfileName, "default profile must be one of the configured profiles"))
+	}
+	return allErrs
+}
+
+func validateKubeSchedulerConfig(rawConfig *runtime.RawExtension, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	cfg, err := configv1alpha1.DecodeKubeSchedulerConfig(rawConfig)
+	if err != nil {
+		return append(allErrs, field.Invalid(fldPath, string(rawConfig.Raw), err.Error()))
+	}
+	if cfg.KubeSchedulerName == "" {
+		return allErrs
+	}
+	schedulerNamePath := fldPath.Child("kubeSchedulerName")
+	for _, msg := range validation.IsDNS1123Subdomain(cfg.KubeSchedulerName) {
+		allErrs = append(allErrs, field.Invalid(schedulerNamePath, cfg.KubeSchedulerName, msg))
+	}
+	if name := configv1alpha1.SchedulerName(cfg.KubeSchedulerName); name != configv1alpha1.SchedulerNameKube && slices.Contains(configv1alpha1.SupportedSchedulerNames, name) {
+		allErrs = append(allErrs, field.Invalid(schedulerNamePath, cfg.KubeSchedulerName, "must not be the name of another scheduler profile"))
 	}
 	return allErrs
 }

@@ -296,3 +296,30 @@ Currently the following schedulers support gang scheduling of `PodGang`s created
   - Disable KAI stale-gang eviction with
     `--set-string scheduler.args.default-staleness-grace-period=-1`. KAI's default eviction can terminate a
     partially scheduled gang before Grove's controller-owned termination delay.
+
+### Choosing the kube-scheduler for Grove workloads
+
+The `default-scheduler` backend runs Grove workloads on kube-scheduler.
+By default it uses the cluster's default kube-scheduler, named `default-scheduler`.
+To use a kube-scheduler with another name, set `kubeSchedulerName` in the `default-scheduler` profile config.
+In the Helm chart values:
+
+```yaml
+config:
+  scheduler:
+    profiles:
+      - name: default-scheduler
+        config:
+          kubeSchedulerName: my-scheduler
+```
+
+The backend then sets `schedulerName: my-scheduler` on the workload Pods it creates. Existing Pods keep their scheduler name.
+A PodCliqueSet selects this backend in any of these ways, and its Pods get `schedulerName: my-scheduler` in each case:
+
+- It leaves `podSpec.schedulerName` empty, and `default-scheduler` is the default profile.
+- It sets `podSpec.schedulerName: default-scheduler`.
+- It sets `podSpec.schedulerName: my-scheduler`.
+
+The name must be a valid DNS subdomain and must not be the name of another scheduler profile.
+The scheduler must schedule Pods the way kube-scheduler does. Grove creates no scheduler-specific resources for it.
+The `kueue` backend also sends admitted Pods to this kube-scheduler, unless its config sets `underlyingSchedulerName`.

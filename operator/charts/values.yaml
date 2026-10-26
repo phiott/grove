@@ -110,6 +110,8 @@ config:
   scheduler:
     profiles:
       - name: default-scheduler
+        # config:
+        #   kubeSchedulerName: my-scheduler
       - name: kai-scheduler
       # Uncomment optional scheduler profiles only when their dependencies are installed.
       # - name: volcano

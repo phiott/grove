@@ -15,6 +15,7 @@
 package kube
 
 import (
+	"cmp"
 	"context"
 
 	configv1alpha1 "github.com/ai-dynamo/grove/operator/api/config/v1alpha1"
@@ -36,6 +37,7 @@ type schedulerBackend struct {
 	name          string
 	eventRecorder record.EventRecorder
 	profile       configv1alpha1.SchedulerProfile
+	config        configv1alpha1.KubeSchedulerConfig
 }
 
 var _ scheduler.Backend = (*schedulerBackend)(nil)
@@ -52,14 +54,16 @@ func New(cl client.Client, scheme *runtime.Scheme, eventRecorder record.EventRec
 	}
 }
 
-// Name returns the pod-facing scheduler name (default-scheduler), for lookup and logging.
 func (b *schedulerBackend) Name() string {
 	return b.name
 }
 
-// Init initializes the Kube backend
-// For Kube backend, no special initialization is needed
 func (b *schedulerBackend) Init(_ client.Client) error {
+	cfg, err := configv1alpha1.DecodeKubeSchedulerConfig(b.profile.Config)
+	if err != nil {
+		return err
+	}
+	b.config = cfg
 	return nil
 }
 
@@ -72,7 +76,7 @@ func (b *schedulerBackend) SyncPodGang(_ context.Context, _ *groveschedulerv1alp
 
 // PreparePod prepares the Pod by setting the relevant schedulerName field with the chosen scheduler backend.
 func (b *schedulerBackend) PreparePod(pod *corev1.Pod) error {
-	pod.Spec.SchedulerName = b.name
+	pod.Spec.SchedulerName = cmp.Or(b.config.KubeSchedulerName, b.name)
 	return nil
 }
 
